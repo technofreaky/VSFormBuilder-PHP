@@ -4,7 +4,9 @@ class VSFormBuilder {
     public function __construct($options = array()) {
         $this->version = "1.0";
         $this->html = '';
-        $this->global_exclude_fields = array('options', 'label', 'help_text', 'label_position', 'option_label_position');
+        $this->global_exclude_fields = array('options', 'label', 'help_text', 'label_position', 'option_label_position','option_key');
+        $this->required_attributes = array();
+        $this->selected_values = array();
         $this->current_param = array();
         $this->formJson = array();
         $this->field_array = array(
@@ -33,6 +35,26 @@ class VSFormBuilder {
         );
         
         $this->settings = $this->_merge($this->defaults,$options);
+    }
+    
+    public function set_selected_values($args = array()){
+        $this->selected_values = $args;
+    }
+    
+    public function get_selected_values($param){
+        $key = '';
+        if(isset($param['name'])){
+            $key = $param['name'];
+        }
+        
+        if(isset($param['option_key'])){
+            $key = $param['option_key'];
+        }
+        
+        if(isset($this->selected_values[$key])){
+            return $this->selected_values[$key];
+        }
+        return false;
     }
     
     protected function _merge($defaults,$options,$force = false){
@@ -157,6 +179,21 @@ class VSFormBuilder {
         return $this;
     }
     
+    public function fix_attributes($type,$data2){
+        $exchange_data = array('id' => time().rand(1,20),'class' => 'input-'.$type);
+        foreach($exchange_data as $i => $v){
+            if(!isset($data2['attributes'][$i]) || empty($data2['attributes'][$i])){
+                $data2['attributes'][$i] =  $v;
+            }
+        }
+        
+        if(!isset($data2['attributes']['name']) || empty($data2['attributes']['name'])){
+            $data2['attributes']['name'] = $data2['attributes']['id'];
+        }
+        
+        return $data2;
+    }
+    
     public function get_field_attributes($type = '',$param = array()){
         $attributes = $param;
         foreach($this->global_exclude_fields as $att){ unset($attributes[$att]); }
@@ -164,10 +201,12 @@ class VSFormBuilder {
         $fa['attributes'] = $this->settings("global_attributes");
         if(!empty($attributes)){ $fa['attributes'] = $this->_merge($fa['attributes'],$attributes);}        
         $data = $this->_merge($fa,$param);
+        
+        $data = $this->fix_attributes($type,$data);
         $data['attributes'] = array_filter($data['attributes']);
         return $data;
     }
-    
+
     public function generate(){
         foreach($this->formJson as $i => $v){
             $type = $v['type'];
@@ -208,11 +247,12 @@ class VSFormBuilder {
         if(empty($param)){ $param = $this->current_param; }        
         $attributes_array = $this->get_field_attributes($type,$param);
         $attributes_array['attributes']['type'] = $type;
-        $attributes_array['attributes']['value'] = isset($param['value']) ? $param['value'] : "";
+        $attributes_array['attributes']['value'] = isset($param['value']) ? $param['value'] : $this->get_selected_values($param);
         $attributes_array['attribute_html'] = $this->_array_to_html($attributes_array['attributes']);
         $this->form_field('inline','input',$attributes_array);
         return $this;        
     }
+    
     public function _options($options,$attrs,$selected = ''){
         $html = '';
         foreach($options as $option_id => $option_value){
@@ -226,7 +266,7 @@ class VSFormBuilder {
                 } else {
                     $attributes = array('value' => $option_id);
                     if(isset($option_value['attributes'])){ $attributes = $this->_merge($attributes,$option_value['attributes']); }
-                    if($option_id == $selected){ $attributes['selected'] = true; }
+                    if(in_array($option_id,$selected)){ $attributes['selected'] = true; }
                     $param = array('attributes' => $attributes);
                     $attributes = $this->get_field_attributes("option",$param);
                     $attributes = $this->_array_to_html($attributes['attributes']);
@@ -234,7 +274,7 @@ class VSFormBuilder {
                 }
             } else {
                 $param = array('attributes' => array("value" => $option_id));
-                if($option_id == $selected){ $param['attributes']['selected'] = true; }                
+                if(in_array($option_id,$selected)){ $param['attributes']['selected'] = true; }                
                 $attributes = $this->get_field_attributes("option",$param);
                 $attributes = $this->_array_to_html($attributes['attributes']);
                 $html .= $this->tag('inline_value','option',$attributes,$option_value);   
@@ -243,22 +283,55 @@ class VSFormBuilder {
         
         return $html;
     }
+    
+    public function _is_checked($param,$type = ''){
+        if(!isset($param['value'])){$param['value'] = 'yes';}
+        $param['selected'] = isset($param['selected']) ? $param['selected'] : $this->get_selected_values($param);
+        if(isset($param['selected'])){
+            if($param['selected'] == $param['value']){
+                $param['checked'] = 'checked';
+            }
+        }
+        
+        return $param;
+    }
+    
     public function check_radio($type = '',$param =  array()){
         if(empty($param)){ $param = $this->current_param; }
         $attrs = $this->get_field_attributes($type,$param);
         $label_before = $label_after = $help_text_before = $help_text_after = $field_html = $label = '';
         $wrap = $this->field_wrap($attrs,'parent_wrap');
         $this->render_tag("open",$wrap['tag'],$wrap['html']);
-        if(!empty($attributes['label'])){ extract($this->form_field_texts('label',$attrs)); }        
-        if(!empty($attributes['help_text'])){ extract($this->form_field_texts('help_text',$attrs)); }        
+        if(!empty($attrs['label'])){ extract($this->form_field_texts('label',$attrs)); }        
+        if(!empty($attrs['help_text'])){ extract($this->form_field_texts('help_text',$attrs)); }        
         $this->_html($label_before);
         $this->_html($help_text_before);
         
-        foreach($attrs['options'] as $id => $val){
+        foreach($attrs['options'] as $id => $Mval){
             $attributes = $attrs;
+            $val = $Mval;
+            
+            if(is_array($Mval)){
+                $attributes['attributes'] = $this->_merge($attributes['attributes'],$Mval['attributes']);
+                $val = $Mval['value'];
+            }
+            
+            $attributes['attributes']['id'] = $type.'-'.$id;
+            
+            if($type == 'checkbox'){
+                if(!isset($attributes['attributes']['name']) || empty($attributes['attributes']['name'])){
+                    $attributes['attributes']['name']= $attributes['attributes']['id'].'[]';
+                }                
+            }
+            
             $attributes['attributes']['value'] = $id;
             $attributes['attributes']['type'] = $type;
-            if($attributes['value'] == $id){ $attributes['attributes']['checked'] =  true; }
+            
+            if(!isset($attributes['selected'])){
+                $attributes['selected'] = $this->get_selected_values($param);
+            } 
+            
+            if($attributes['selected'] == $id){ $attributes['attributes']['checked'] =  true; }
             $attributes['label'] = $val;
             if(isset($param['option_label_position'])){ $attributes['label_position'] = $param['option_label_position']; }
             $attributes['attribute_html'] = $this->_array_to_html($attributes['attributes']);
@@ -270,41 +343,78 @@ class VSFormBuilder {
         $this->render_tag("end",$wrap['tag'],$wrap['html']);
         return $this;
     }
+    
     public function textarea($param = array()){
         if(empty($param)){ $param = $this->current_param; }
         $attributes_array = $this->get_field_attributes('textarea',$param);
+        $attributes_array['attributes']['value'] = isset($param['value']) ? $param['value'] : $this->get_selected_values($param['name']);
         $attributes_array['attribute_html'] = $this->_array_to_html($attributes_array['attributes']);
         $this->form_field('inline_value','textarea',$attributes_array);
         return $this;        
     }
+    
     public function select($param = array()){
         if(empty($param)){ $param = $this->current_param; }        
         $attrs = $this->get_field_attributes('select',$param);
-        $selected = isset($attrs['value']) ? $attrs['value'] : "";
+        
+        $selected = isset($attrs['selected']) ? $attrs['selected'] : $this->get_selected_values($param);
         $options = $attrs['options'];
         unset($attrs['options']);
+        
+        if(!is_array($selected)){$selected = array($selected);}        
         $option_html = $this->_options($options,$attrs,$selected);
         $attrs['attribute_html'] = $this->_array_to_html($attrs['attributes']);
         $this->form_field('inline_value','select',$attrs,$option_html);
         return $this;
     }
+    
     public function text($param = array()){ return $this->input_field("text",$param);}
+    
     public function password($param = array()){ return $this->input_field("password",$param);}
+    
     public function search($param = array()){ return $this->input_field("search",$param);}
+    
     public function email($param = array()){ return $this->input_field("email",$param);}
+    
     public function url($param = array()){ return $this->input_field("url",$param);}
+    
     public function tel($param = array()){ return $this->input_field("tel",$param);}
+    
     public function number($param = array()){ return $this->input_field("number",$param);}
+    
     public function range($param = array()){ return $this->input_field("range",$param);}
+    
     public function date($param = array()){ return $this->input_field("date",$param);}
+    
     public function month($param = array()){ return $this->input_field("month",$param);}
+    
     public function week($param = array()){ return $this->input_field("week",$param);}
+    
     public function time($param = array()){ return $this->input_field("time",$param);}
+    
     public function datetime($param = array()){ return $this->input_field("datetime",$param);}
+    
     public function datetime_local($param = array()){ return $this->input_field("datetime_local",$param);}
+    
     public function color($param = array()){ return $this->input_field("color",$param);}
+    
     public function file($param = array()){ return $this->input_field("file",$param);}
-    public function radio($param = array()){ return $this->check_radio("radio",$param);}
-    public function checkbox($param = array()){ return $this->check_radio("checkbox",$param);}
+    
+    public function radio($param = array()){ 
+        if(empty($param)){ $param = $this->current_param; } 
+        $param = $this->_is_checked($param,'radio');
+        return $this->input_field("radio",$param);
+    }
+    
+    public function checkbox($param = array()){ 
+        if(empty($param)){ $param = $this->current_param; } 
+        $param = $this->_is_checked($param,'checkbox');
+        return $this->input_field("checkbox",$param);
+    }
+    
+    public function radio_group($param = array()){ return $this->check_radio("radio",$param);}
+    
+    public function checkbox_group($param = array()){ return $this->check_radio("checkbox",$param);}
+    
     public function submit($param = array()){ return $this->input_field('submit',$param);}
 }
